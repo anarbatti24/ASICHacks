@@ -1,0 +1,26 @@
+=== Command: tree -L 2 -a --dirsfirst 2>/dev/null || find . -maxdepth 2 -not -path '*/\.git/*' | sort (2026-02-16T22:48:00.141Z) ===
+Exit Code: 0
+Output:
+.
+./.cogni
+./.cogni/output_toolu_012qa8178iYAmK6B7zqb1RSF.txt
+./.cogni/output_toolu_01FKacx2yp7mxLDSaxniv5gg.txt
+./.cogni/output_toolu_01KiKNJA95Az9Ba5BKJyVrq4.txt
+./.git
+./DEPS.yml
+./PROJECT_README.md
+./README.md
+./TEAM_ASSIGNMENTS.md
+./docs
+./docs/multi_lane_crypto_accelerator_architecture.md
+./rtl
+./sim
+./sim/.gitkeep
+./sim/README.md
+./syn
+./syn/.gitkeep
+./syn/README.md
+./tb
+
+=== End Output ===
+

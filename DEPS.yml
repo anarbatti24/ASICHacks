@@ -1,0 +1,137 @@
+# Multi-Lane Streaming Crypto Accelerator
+# DEPS Configuration File
+# 
+# This file defines build targets for RTL modules and testbenches
+# Use with your preferred simulator (Verilator, VCS, Questa, etc.)
+
+# ==============================================================================
+# RTL Module Targets (Design Under Test)
+# ==============================================================================
+
+# Performance Counter Module
+dut_performance_counter:
+  deps:
+    - rtl/performance_counter.sv
+
+# Encryption Engine (core cipher logic)
+dut_encrypt_engine:
+  deps:
+    - rtl/encrypt_engine.sv
+
+# Encryption Lane (Person 1's module)
+dut_encryption_lane:
+  deps:
+    - rtl/encrypt_engine.sv
+    - rtl/encryption_lane.sv
+  top: encryption_lane
+
+# Block Distributor (Person 2's module)
+dut_block_distributor:
+  deps:
+    - rtl/block_distributor.sv
+  top: block_distributor
+
+# Output Combiner (Person 3's module)
+dut_output_combiner:
+  deps:
+    - rtl/output_combiner.sv
+  top: output_combiner
+
+# Full System Integration (Person 4's module)
+dut_crypto_accelerator:
+  deps:
+    - rtl/performance_counter.sv
+    - rtl/encrypt_engine.sv
+    - rtl/encryption_lane.sv
+    - rtl/block_distributor.sv
+    - rtl/output_combiner.sv
+    - rtl/crypto_accelerator_top.sv
+  top: crypto_accelerator_top
+
+# ==============================================================================
+# Testbench Targets (Individual Module Verification)
+# ==============================================================================
+
+# Performance Counter Testbench
+tb_performance_counter:
+  deps:
+    - dut_performance_counter
+    - tb/performance_counter_tb.sv
+  top: performance_counter_tb
+
+# Encryption Engine Testbench
+tb_encrypt_engine:
+  deps:
+    - dut_encrypt_engine
+    - tb/encrypt_engine_tb.sv
+  top: encrypt_engine_tb
+
+# Encryption Lane Testbench (Person 1's verification)
+tb_encryption_lane:
+  deps:
+    - dut_encryption_lane
+    - tb/encryption_lane_tb.sv
+  top: encryption_lane_tb
+
+# Block Distributor Testbench (Person 2's verification)
+tb_block_distributor:
+  deps:
+    - dut_block_distributor
+    - tb/block_distributor_tb.sv
+  top: block_distributor_tb
+
+# Output Combiner Testbench (Person 3's verification)
+tb_output_combiner:
+  deps:
+    - dut_output_combiner
+    - tb/output_combiner_tb.sv
+  top: output_combiner_tb
+
+# ==============================================================================
+# System-Level Integration Testbench (Person 4's verification)
+# ==============================================================================
+
+tb_crypto_accelerator_system:
+  deps:
+    - dut_crypto_accelerator
+    - tb/crypto_accelerator_tb.sv
+  top: crypto_accelerator_tb
+  defines:
+    NUM_TEST_BLOCKS: 1000
+    ENABLE_WAVEFORM_DUMP: 1
+  plusargs:
+    - verbose
+    - coverage
+
+# ==============================================================================
+# Quick Test Targets (Shorter runs for debugging)
+# ==============================================================================
+
+tb_crypto_accelerator_quick:
+  deps:
+    - dut_crypto_accelerator
+    - tb/crypto_accelerator_tb.sv
+  top: crypto_accelerator_tb
+  defines:
+    NUM_TEST_BLOCKS: 100
+    ENABLE_WAVEFORM_DUMP: 1
+  plusargs:
+    - verbose
+
+# ==============================================================================
+# Usage Examples:
+# ==============================================================================
+# 
+# Individual module testing (Day 2-3):
+#   - Person 1: simulate tb_encryption_lane
+#   - Person 2: simulate tb_block_distributor
+#   - Person 3: simulate tb_output_combiner
+#   - Person 4: simulate tb_performance_counter
+#
+# System integration (Day 4):
+#   - simulate tb_crypto_accelerator_quick (fast debug)
+#   - simulate tb_crypto_accelerator_system (full verification)
+#
+# Synthesis (Day 6):
+#   - synthesize dut_crypto_accelerator
+#
