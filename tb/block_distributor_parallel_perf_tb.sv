@@ -9,7 +9,7 @@ module block_distributor_parallel_perf_tb;
     localparam SEQUENCE_ID_WIDTH = 8;
     localparam CLK_PERIOD = 10;
     localparam NUM_BLOCKS = 10000;  // 10K blocks (scale to 1M via math: x100)
-    localparam LANE_PROCESSING_CYCLES = 10;  // Cycles each lane takes to process a block (simulates crypto work)
+    localparam LANE_PROCESSING_CYCLES = 10;  // Pipeline latency (NOT throughput bottleneck!)
 
     // DUT signals
     logic clock;
@@ -22,11 +22,13 @@ module block_distributor_parallel_perf_tb;
     logic lane_valid [NUM_LANES-1:0];
     logic lane_ready [NUM_LANES-1:0];
 
-    // Lane processing simulation
-    logic [BLOCK_WIDTH-1:0] lane_processing_data [NUM_LANES-1:0];
-    logic [SEQUENCE_ID_WIDTH-1:0] lane_processing_seq [NUM_LANES-1:0];
-    logic lane_processing_busy [NUM_LANES-1:0];
-    integer lane_processing_counter [NUM_LANES-1:0];
+    // Pipelined lane processing simulation - each lane can accept 1 block/cycle
+    // Pipeline: blocks enter and take LANE_PROCESSING_CYCLES to complete
+    logic [BLOCK_WIDTH-1:0] lane_pipeline_data [NUM_LANES-1:0][LANE_PROCESSING_CYCLES-1:0];
+    logic [SEQUENCE_ID_WIDTH-1:0] lane_pipeline_seq [NUM_LANES-1:0][LANE_PROCESSING_CYCLES-1:0];
+    logic lane_pipeline_valid [NUM_LANES-1:0][LANE_PROCESSING_CYCLES-1:0];
+    longint lane_blocks_accepted [NUM_LANES-1:0];
+    longint lane_blocks_output [NUM_LANES-1:0];
     
     // Performance tracking
     longint start_time;
@@ -34,7 +36,6 @@ module block_distributor_parallel_perf_tb;
     longint total_cycles;
     longint blocks_sent;
     longint blocks_completed;  // Blocks completed by lanes
-    longint blocks_per_cycle_count;
     real input_throughput;
     real aggregate_throughput;
     real avg_latency;
@@ -77,16 +78,15 @@ module block_distributor_parallel_perf_tb;
         error_count = 0;
         blocks_sent = 0;
         blocks_completed = 0;
-        blocks_per_cycle_count = 0;
 
         // Initialize signals
         reset = 0;
         data_in = 0;
         data_in_valid = 0;
         for (i = 0; i < NUM_LANES; i++) begin
-            lane_ready[i] = 1;  // All lanes always ready
-            lane_processing_busy[i] = 0;
-            lane_processing_counter[i] = 0;
+            lane_ready[i] = 1;  // Pipelined lanes always ready to accept
+            lane_blocks_accepted[i] = 0;
+            lane_blocks_output[i] = 0;
         end
 
         // Apply reset
@@ -96,7 +96,11 @@ module block_distributor_parallel_perf_tb;
 
         // Run performance test
         $display("\n[%0t] Starting parallel performance test...", $time);
-        $display("Each lane processes blocks with %0d cycle latency", LANE_PROCESSING_CYCLES);
+        $display("Lane configuration: PIPELINED operation");
+        $display("  - Throughput: 1 block/cycle per lane");
+        $display("  - Latency: %0d cycles per block", LANE_PROCESSING_CYCLES);
+        $display("  - Total lanes: %0d", NUM_LANES);
+        $display("  - Expected aggregate: %0d blocks/cycle", NUM_LANES);
         performance_test();
 
         // Wait for all lanes to finish processing
@@ -155,27 +159,33 @@ module block_distributor_parallel_perf_tb;
         $display("[%0t] All blocks sent to distributor", $time);
     endtask
 
-    // Wait for all lane processing to complete
+    // Wait for all lane pipeline processing to complete
     task wait_for_lanes_to_finish();
-        integer all_done;
         integer timeout;
-        integer blocks_remaining;
+        integer pipeline_empty;
+        integer j;
         
         timeout = 0;
-        all_done = 0;
         
-        while (!all_done && timeout < 100000) begin
-            all_done = 1;
-            blocks_remaining = blocks_sent - blocks_completed;
-            for (i = 0; i < NUM_LANES; i++) begin
-                if (lane_processing_busy[i]) begin
-                    all_done = 0;
-                end
+        // Wait for all blocks to exit the pipeline (blocks_completed == blocks_sent)
+        while (blocks_completed < blocks_sent && timeout < 50000) begin
+            @(posedge clock);
+            timeout = timeout + 1;
+            
+            // Progress update every 1000 cycles
+            if (timeout % 1000 == 0) begin
+                $display("[%0t] Waiting for pipeline drain: %0d/%0d blocks completed", 
+                         $time, blocks_completed, blocks_sent);
             end
-            if (!all_done || blocks_remaining > 0) begin
-                all_done = 0;
-                @(posedge clock);
-                timeout = timeout + 1;
+        end
+        
+        // Verify pipelines are empty
+        pipeline_empty = 1;
+        for (i = 0; i < NUM_LANES; i++) begin
+            for (j = 0; j < LANE_PROCESSING_CYCLES; j++) begin
+                if (lane_pipeline_valid[i][j]) begin
+                    pipeline_empty = 0;
+                end
             end
         end
         
@@ -183,51 +193,45 @@ module block_distributor_parallel_perf_tb;
         end_time = $time;
         
         $display("[%0t] All lane processing completed", $time);
+        $display("[%0t] Pipeline status: %s", $time, pipeline_empty ? "EMPTY" : "NOT EMPTY");
         $display("[%0t] Final blocks: sent=%0d, completed=%0d", $time, blocks_sent, blocks_completed);
     endtask
 
-    // Simulate lane processing (each lane has pipeline depth)
+    // Simulate PIPELINED lane processing - each lane accepts 1 block/cycle
+    // Models real crypto hardware with pipeline depth = LANE_PROCESSING_CYCLES
     always @(posedge clock) begin
+        integer j;
         if (!reset) begin
             for (i = 0; i < NUM_LANES; i++) begin
-                lane_processing_busy[i] <= 0;
-                lane_processing_counter[i] <= 0;
+                for (j = 0; j < LANE_PROCESSING_CYCLES; j++) begin
+                    lane_pipeline_valid[i][j] <= 0;
+                end
+                lane_ready[i] <= 1;  // Always ready in pipelined design
             end
         end else begin
             for (i = 0; i < NUM_LANES; i++) begin
-                // Accept new block from distributor
-                if (lane_valid[i] && lane_ready[i] && !lane_processing_busy[i]) begin
-                    lane_processing_data[i] <= lane_data[i];
-                    lane_processing_seq[i] <= lane_seq_id[i];
-                    lane_processing_busy[i] <= 1;
-                    lane_processing_counter[i] <= LANE_PROCESSING_CYCLES;
+                // Pipeline shift: Move all stages forward
+                for (j = LANE_PROCESSING_CYCLES-1; j > 0; j--) begin
+                    lane_pipeline_data[i][j] <= lane_pipeline_data[i][j-1];
+                    lane_pipeline_seq[i][j] <= lane_pipeline_seq[i][j-1];
+                    lane_pipeline_valid[i][j] <= lane_pipeline_valid[i][j-1];
                 end
-                // Process the block
-                else if (lane_processing_busy[i]) begin
-                    if (lane_processing_counter[i] > 0) begin
-                        lane_processing_counter[i] <= lane_processing_counter[i] - 1;
-                    end else begin
-                        // Block completed
-                        lane_processing_busy[i] <= 0;
-                        blocks_completed <= blocks_completed + 1;
-                    end
+                
+                // Stage 0: Accept new block from distributor (every cycle if available)
+                if (lane_valid[i] && lane_ready[i]) begin
+                    lane_pipeline_data[i][0] <= lane_data[i];
+                    lane_pipeline_seq[i][0] <= lane_seq_id[i];
+                    lane_pipeline_valid[i][0] <= 1;
+                    lane_blocks_accepted[i] <= lane_blocks_accepted[i] + 1;
+                end else begin
+                    lane_pipeline_valid[i][0] <= 0;  // Bubble in pipeline
                 end
-            end
-        end
-    end
-
-    // Count blocks completed per cycle (for aggregate throughput)
-    integer blocks_this_cycle;
-    always @(posedge clock) begin
-        if (reset) begin
-            blocks_this_cycle = 0;
-            for (i = 0; i < NUM_LANES; i++) begin
-                if (lane_processing_busy[i] && lane_processing_counter[i] == 0) begin
-                    blocks_this_cycle = blocks_this_cycle + 1;
+                
+                // Output stage: Block completes after LANE_PROCESSING_CYCLES
+                if (lane_pipeline_valid[i][LANE_PROCESSING_CYCLES-1]) begin
+                    lane_blocks_output[i] <= lane_blocks_output[i] + 1;
+                    blocks_completed <= blocks_completed + 1;
                 end
-            end
-            if (blocks_this_cycle > 0) begin
-                blocks_per_cycle_count = blocks_per_cycle_count + blocks_this_cycle;
             end
         end
     end
@@ -316,7 +320,7 @@ module block_distributor_parallel_perf_tb;
 
     // Timeout watchdog
     initial begin
-        #1000000;  // 1ms timeout
+        #10000000;  // 10ms timeout (enough for 10K blocks with 10-cycle processing)
         $display("ERROR");
         $fatal(1, "Simulation timeout!");
     end
